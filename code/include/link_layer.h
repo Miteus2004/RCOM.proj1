@@ -26,8 +26,8 @@ typedef enum {
     C_RCV,
     BCC_OK,
     STOP_STATE,
-    //DATA,
-    //BCC2_OK
+    DATA,
+    ESCAPE_STATE
 } State;
 
 // SIZE of maximum acceptable payload.
