@@ -138,7 +138,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     }
 
     // Sem estatísticas por agora
-    if (llclose(0) == -1)
+    if (llclose(1) == -1)
     {
         printf("Failed to do llclose\n");
         exit(-1);

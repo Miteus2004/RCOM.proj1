@@ -6,8 +6,8 @@
 #include <stdio.h>
 #include <signal.h>
 #include <unistd.h>
-
-
+#include <stdlib.h>
+#include <sys/time.h>
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
@@ -18,6 +18,12 @@ extern int fd;
 volatile int waitAlarm = FALSE;
 unsigned char control_flag = 0;
 int currSeq = 0;
+
+unsigned int totalFramesSent = 0;
+unsigned int totalFramesReceived = 0;
+unsigned int retransmissions = 0;
+unsigned int totalDataBytes = 0; 
+struct timeval start_time, end_time;
 
 void alarmHandler(int signal)
 {
@@ -152,7 +158,7 @@ int llopen(LinkLayer connectionParameters)
     if (fd < 0) {
         return -1;
     }
-
+    gettimeofday(&start_time, NULL);
     switch (connectionParameters.role)
     {
     case LlTx:
@@ -233,6 +239,8 @@ int llwrite(const unsigned char *buf, int bufSize)
 
         if (!waitAlarm) {
             alarmCount++;
+            retransmissions += alarmCount > 1 ? 1 : 0;
+            totalFramesSent++;
             bytesSent = write(fd, iframe, idx+1);
             printf("Written bytes on frame: %d\n", bytesSent);
             
@@ -265,7 +273,7 @@ int llread(unsigned char *packet)
 {
     State state_read = START;
     unsigned char control_byte, byte;
-    int idx = 0;
+    int idx = 0; 
 
     while (state_read != STOP_STATE) {
 
@@ -364,6 +372,8 @@ int llread(unsigned char *packet)
     unsigned char response[5] = {FLAG, A_TRANS, control_response, A_TRANS ^ control_response, FLAG};
     int writtenBytes = write(fd, response, 5);
     printf("Written bytes on response: %d\n", writtenBytes);
+    totalFramesReceived++;
+    totalDataBytes += idx;
     currSeq = 1 - currSeq;
     printf("New currSeq: %d\n", currSeq);
     return idx;
@@ -372,10 +382,221 @@ int llread(unsigned char *packet)
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////
-int llclose(int showStatistics)
-{
-    // TODO
+int llclose(int showStatistics) {
+    state = START;
+    unsigned char byte;
+    unsigned char discFrame[5] = {FLAG, A_RECEIV, C_DISC, A_RECEIV ^ C_DISC, FLAG};
+    unsigned char uaFrame[5] = {FLAG, A_RECEIV, C_UA, A_RECEIV ^ C_UA, FLAG};
 
+    (void)signal(SIGALRM, alarmHandler);
+    int alarmCount = 0;
+
+    if (parameters.role == LlTx) {
+        while (alarmCount < parameters.nRetransmissions) {
+            int bytesWritten = write(fd, discFrame, 5);
+            printf("Transmitter sent DISC frame bytes: %d\n", bytesWritten);
+
+            if (bytesWritten != 5) {
+                perror("Error writing DISC frame");
+                return -1;
+            }
+
+            alarm(parameters.timeout);
+            waitAlarm = TRUE;
+
+            while (waitAlarm) {
+                int bytesRead = read(fd, &byte, 1);
+                if (bytesRead > 0) {
+                    printf("Transmitter received byte: %02X, State: %d\n", byte, state);
+
+                    switch (state) {
+                        case START:
+                            if (byte == FLAG) {
+                                state = FLAG_RCV;
+                            }
+                            break;
+
+                        case FLAG_RCV:
+                            if (byte == A_RECEIV) {
+                                state = A_RCV;
+                            } else if (byte != FLAG) {
+                                state = START;
+                            }
+                            break;
+
+                        case A_RCV:
+                            if (byte == C_DISC) {
+                                state = C_RCV;
+                            } else if (byte == FLAG) {
+                                state = FLAG_RCV;
+                            } else {
+                                state = START;
+                            }
+                            break;
+
+                        case C_RCV:
+                            if (byte == (A_RECEIV ^ C_DISC)) {
+                                state = BCC_OK;
+                            } else if (byte == FLAG) {
+                                state = FLAG_RCV;
+                            } else {
+                                state = START;
+                            }
+                            break;
+
+                        case BCC_OK:
+                            if (byte == FLAG) {
+                                state = STOP_STATE;
+                                waitAlarm = FALSE;
+                                alarm(0);
+                            } else {
+                                state = START;
+                            }
+                            break;
+
+                        default:
+                            state = START;
+                            break;
+                    }
+                } else if (bytesRead < 0) {
+                    perror("Error reading byte");
+                    return -1;
+                }
+            }
+
+            if (state == STOP_STATE) {
+                break;
+            }
+
+            alarmCount++;
+        }
+
+        if (state != STOP_STATE) {
+            printf("Transmitter failed to receive DISC frame\n");
+            return -1;
+        }
+
+        int bytesWritten = write(fd, uaFrame, 5);
+        printf("Transmitter sent UA frame bytes: %d\n", bytesWritten);
+
+        if (bytesWritten != 5) {
+            perror("Error sending UA frame");
+            return -1;
+        }
+
+        if (showStatistics) {
+            gettimeofday(&end_time, NULL);
+            double executionTime = (end_time.tv_sec - start_time.tv_sec) + 
+                                    (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+            double FER = (double)(retransmissions) / (double)(totalFramesSent);
+            printf("=== Transmitter Statistics ===\n");
+            printf("Total Execution Time: %.2f seconds\n", executionTime);
+            printf("Total Frames Sent: %u\n", totalFramesSent);
+            printf("Total Retransmissions: %u\n", retransmissions);
+            printf("Frame Error Rate (FER): %.2f\n", FER);
+            printf("=============================\n");
+        }
+
+    } else if (parameters.role == LlRx) {
+        while (alarmCount < parameters.nRetransmissions) {
+            int bytesRead = read(fd, &byte, 1);
+            if (bytesRead > 0) {
+                printf("Receiver received byte: %02X, State: %d\n", byte, state);
+
+                switch (state) {
+                    case START:
+                        if (byte == FLAG) {
+                            state = FLAG_RCV;
+                        }
+                        break;
+
+                    case FLAG_RCV:
+                        if (byte == A_RECEIV) {
+                            state = A_RCV;
+                        } else if (byte != FLAG) {
+                            state = START;
+                        }
+                        break;
+
+                    case A_RCV:
+                        if (byte == C_DISC) {
+                            state = C_RCV;
+                        } else if (byte == FLAG) {
+                            state = FLAG_RCV;
+                        } else {
+                            state = START;
+                        }
+                        break;
+
+                    case C_RCV:
+                        if (byte == (A_RECEIV ^ C_DISC)) {
+                            state = BCC_OK;
+                        } else if (byte == FLAG) {
+                            state = FLAG_RCV;
+                        } else {
+                            state = START;
+                        }
+                        break;
+
+                    case BCC_OK:
+                        if (byte == FLAG) {
+                            state = STOP_STATE;
+                            waitAlarm = FALSE;
+                        } else {
+                            state = START;
+                        }
+                        break;
+
+                    default:
+                        state = START;
+                        break;
+                }
+            }
+
+            if (state == STOP_STATE) {
+                break;
+            }
+        }
+
+        if (state != STOP_STATE) {
+            printf("Receiver failed to receive DISC frame\n");
+            return -1;
+        }
+
+        int bytesWritten = write(fd, discFrame, 5);
+        printf("Receiver sent DISC frame bytes: %d\n", bytesWritten);
+
+        if (bytesWritten != 5) {
+            perror("Error sending DISC frame");
+            return -1;
+        }
+
+        alarm(parameters.timeout);
+        waitAlarm = TRUE;
+
+        while (waitAlarm) {
+            int bytesRead = read(fd, &byte, 1);
+            if (bytesRead > 0) {
+                printf("Receiver received byte: %02X\n", byte);
+                if (byte == FLAG) {
+                    state = STOP_STATE;
+                    waitAlarm = FALSE;
+                }
+            }
+        }
+
+        if (showStatistics) {
+            unsigned int totalBitsTransferred = totalDataBytes * 8;
+            double bitrate = parameters.baudRate;
+            double efficiency = (double)totalBitsTransferred / bitrate;
+            printf("=== Receiver Statistics ===\n");
+            printf("Total Frames Received: %u\n", totalFramesReceived);
+            printf("Total Data Transferred: %u bytes\n", totalDataBytes);
+            printf("Efficiency (S): %.2f\n", efficiency);
+            printf("Total Data Received: %u bytes\n", totalDataBytes);
+            printf("============================\n");
+        }
+    }
     int clstat = closeSerialPort();
     return clstat;
 }
