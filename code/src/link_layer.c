@@ -75,7 +75,7 @@ void handleState(unsigned char byte) {
         case BCC_OK:
             if (byte == FLAG) {
                 state = STOP_STATE;
-                printf("\nFrame received!\n");
+                printf("Frame received!\n");
             }
             break;
         case STOP_STATE:
@@ -89,12 +89,12 @@ void handleState(unsigned char byte) {
 int transmitterSETframe() {
     (void)signal(SIGALRM, alarmHandler);
     int bytesSent = 0;
-    unsigned char response;
+    unsigned char response = {0};
     unsigned char frame[5] = {FLAG, A_TRANS, C_SET, A_TRANS ^ C_SET, FLAG};
     printf("Sending SENT frame\n");
     
     int alarmCount = 0;
-    while (alarmCount < parameters.nRetransmissions) {
+    while (alarmCount <= parameters.nRetransmissions) {
         if (!waitAlarm) {
             alarmCount++;
             bytesSent = write(fd, frame, 5);
@@ -124,7 +124,7 @@ int transmitterSETframe() {
 
 int receiverSETframe() {
     while (TRUE) {
-        unsigned char byteFrame;
+        unsigned char byteFrame = 0;
 
         int byteRead = read(fd, &byteFrame, 1);
 
@@ -226,14 +226,12 @@ int llwrite(const unsigned char *buf, int bufSize)
 
     iframe[idx] = FLAG;
 
-    printf("\n");
-
     int alarmCount = 0;
     int bytesSent = 0;
     waitAlarm = FALSE;
     state = START;
-    unsigned char response;
-    while (alarmCount < parameters.nRetransmissions) {
+    unsigned char response = 0;
+    while (alarmCount <= parameters.nRetransmissions) {
 
         if (!waitAlarm) {
             alarmCount++;
@@ -248,7 +246,6 @@ int llwrite(const unsigned char *buf, int bufSize)
         int bytesResponse = read(fd, &response, 1);
 
         if (bytesResponse > 0) {
-            printf("%02X ", response);
             handleState(response);
         }
 
@@ -256,7 +253,6 @@ int llwrite(const unsigned char *buf, int bufSize)
             alarm(0);
             printf("Info frame received\n");
             currSeq = 1 - currSeq;
-            printf("New currSeq: %d\n", currSeq);
             return idx;
         }
     }
@@ -270,7 +266,7 @@ int llwrite(const unsigned char *buf, int bufSize)
 int llread(unsigned char *packet)
 {
     State state_read = START;
-    unsigned char control_byte, byte;
+    unsigned char control_byte = 0, byte = 0;
     int idx = 0; 
 
     while (state_read != STOP_STATE) {
@@ -354,7 +350,7 @@ int llread(unsigned char *packet)
         bcc2 ^= packet[i];
     }
 
-    unsigned char control_response;
+    unsigned char control_response = 0;
 
     if (bcc2 != packet[idx-1]) {
         printf("Wrong bcc2!\n");
@@ -373,7 +369,6 @@ int llread(unsigned char *packet)
     totalFramesReceived++;
     totalDataBytes += idx;
     currSeq = 1 - currSeq;
-    printf("New currSeq: %d\n", currSeq);
     return idx;
 }
 
@@ -390,7 +385,7 @@ int llclose(int showStatistics) {
     int alarmCount = 0;
 
     if (parameters.role == LlTx) {
-        while (alarmCount < parameters.nRetransmissions) {
+        while (alarmCount <= parameters.nRetransmissions) {
             int bytesWritten = write(fd, discFrame, 5);
             printf("Transmitter sent DISC frame bytes: %d\n", bytesWritten);
 
@@ -496,7 +491,7 @@ int llclose(int showStatistics) {
         }
 
     } else if (parameters.role == LlRx) {
-        while (alarmCount < parameters.nRetransmissions) {
+        while (alarmCount <= parameters.nRetransmissions) {
             int bytesRead = read(fd, &byte, 1);
             if (bytesRead > 0) {
                 printf("Receiver received byte: %02X, State: %d\n", byte, state);

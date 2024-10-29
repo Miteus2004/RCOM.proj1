@@ -78,7 +78,7 @@ int sendFile(const char *filename)
     unsigned char buffer[MAX_PAYLOAD_SIZE] = {0};
 
     while ((bytesRead = fread(buffer, 1, MAX_PAYLOAD_SIZE, file)) > 0) {
-
+        printf("\nPacket Number: %d\n", packetNumber);
         unsigned char packet[MAX_PAYLOAD_SIZE + 4];
         packet[0] = PACKET_DATA;
         packet[1] = packetNumber;
@@ -93,7 +93,6 @@ int sendFile(const char *filename)
             exit(-1);
         }
 
-        printf("Packet Number: %d\n", packetNumber);
         packetNumber = (packetNumber + 1) % 100;
     }
 
@@ -130,8 +129,9 @@ int receiveFile(const char *filename)
     int packetNumber = 0;
 
     while (bytesWritten < filesize) {
+        printf("\nPacket number: %d\n", packetNumber);
         unsigned char packet[MAX_PAYLOAD_SIZE + 4] = {0};
-        llread(packet);
+        int bytesSent = llread(packet);
 
         if (packet[0] != PACKET_DATA) {
             printf("Error receiving data packet!\n");
@@ -145,13 +145,15 @@ int receiveFile(const char *filename)
             exit(-1);
         }
 
-        int size = packet[2] * 256 + packet[3];
-        memcpy(buffer, &packet[4], size);
+        if (bytesSent > 0) {
+            int size = packet[2] * 256 + packet[3];
+            memcpy(buffer, &packet[4], size);
 
-        bytesWritten += fwrite(buffer, 1, size, file);
-        printf("Written %d bytes\n", bytesWritten);
+            bytesWritten += fwrite(buffer, 1, size, file);
+            printf("Written %d bytes\n", bytesWritten);
 
-        packetNumber = (packetNumber + 1) % 100;
+            packetNumber = (packetNumber + 1) % 100;
+        }
     }
 
     if (receiveControlPacket(PACKET_END, &filesize) != 0) {
