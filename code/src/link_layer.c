@@ -185,7 +185,8 @@ int llwrite(const unsigned char *buf, int bufSize)
 {
     printf("Writting bytes...\n");
 
-    unsigned char iframe[bufSize*3], bcc2 = 0, idx = 0;
+    unsigned char iframe[bufSize*2], bcc2 = 0;
+    int idx = 0;
     iframe[idx] = FLAG; idx++;
     iframe[idx] = A_TRANS; idx++;
     iframe[idx] = currSeq ? C_I1 : C_I0; idx++;
@@ -225,9 +226,6 @@ int llwrite(const unsigned char *buf, int bufSize)
 
     iframe[idx] = FLAG;
 
-    for (int i = 0; i < idx +1; i++) {
-        printf("%02x ", iframe[i]);
-    }
     printf("\n");
 
     int alarmCount = 0;
@@ -276,77 +274,77 @@ int llread(unsigned char *packet)
     int idx = 0; 
 
     while (state_read != STOP_STATE) {
-
         int byteRead = read(fd, &byte, 1);
 
         if (byteRead > 0) {
             switch (state_read) {
-            case START:
-                if (byte == FLAG) {
-                    state_read = FLAG_RCV;
-                } else {
-                    state_read = START;
-                }
-                break;
-            case FLAG_RCV:
-                if (byte == A_TRANS) {
-                    state_read = A_RCV;
-                } else if (byte != FLAG) {
-                    state_read = START;
-                }
-                break;
-            case A_RCV:
-                if (byte == C_I0 || byte == C_I1) {
-                    control_byte = byte;
-                    state_read = C_RCV;
-                } else if (byte == FLAG) {
-                    state_read = FLAG_RCV;
-                } else {
-                    state_read = START;
-                }
-                break;
-            case C_RCV:
-                if (byte == (A_TRANS ^ control_byte)) {
-                    state_read = BCC_OK;
-                } else if (byte == FLAG) {
-                    state_read = FLAG_RCV;
-                } else {
-                    state_read = START;
-                }
-                break;
-            case BCC_OK:
-                if (byte == FLAG) {
-                    state_read = STOP_STATE;
-                } else if (byte == ESCAPE) {
-                    state_read = ESCAPE_STATE;
-                } else {
-                    packet[idx] = byte; idx++;
-                    state_read = DATA;
-                }
-                break;
-            case DATA:
-                if (byte == ESCAPE) {
-                    state_read = ESCAPE_STATE;
-                } else if (byte == FLAG) {
-                    state_read = STOP_STATE;
-                } else {
-                    packet[idx] = byte; idx++;
-                }
-                break;
-            case ESCAPE_STATE:
-                if (byte == (FLAG ^ 0x20)) {
-                    state_read = DATA;
-                    packet[idx] = FLAG; idx++;
-                } else if (byte == (ESCAPE ^ 0x20)) {
-                    state_read = DATA;
-                    packet[idx] = ESCAPE; idx++;
-                } else {
-                    state_read = START;
-                }
-                break;
-            case STOP_STATE:
-            default:
-                break;
+                case START:
+                    if (byte == FLAG) {
+                        state_read = FLAG_RCV;
+                    } else {
+                        state_read = START;
+                    }
+                    break;
+                case FLAG_RCV:
+                    if (byte == A_TRANS) {
+                        state_read = A_RCV;
+                    } else if (byte != FLAG) {
+                        state_read = START;
+                    }
+                    break;
+                case A_RCV:
+                    if (byte == C_I0 || byte == C_I1) {
+                        control_byte = byte;
+                        state_read = C_RCV;
+                    } else if (byte == FLAG) {
+                        state_read = FLAG_RCV;
+                    } else {
+                        state_read = START;
+                    }
+                    break;
+                case C_RCV:
+                    if (byte == (A_TRANS ^ control_byte)) {
+                        state_read = BCC_OK;
+                    } else if (byte == FLAG) {
+                        state_read = FLAG_RCV;
+                    } else {
+                        state_read = START;
+                    }
+                    break;
+                case BCC_OK:
+                    if (byte == FLAG) {
+                        state_read = STOP_STATE;
+                    } else if (byte == ESCAPE) {
+                        state_read = ESCAPE_STATE;
+                    } else {
+                        packet[idx] = byte; idx++;
+                        state_read = DATA;
+                    }
+                    break;
+                case DATA:
+                    if (byte == ESCAPE) {
+                        state_read = ESCAPE_STATE;
+                    } else if (byte == FLAG) {
+                        state_read = STOP_STATE;
+                    } else {
+                        packet[idx] = byte; idx++;
+                    }
+                    break;
+                case ESCAPE_STATE:
+                    if (byte == (FLAG ^ 0x20)) {
+                        state_read = DATA;
+                        packet[idx] = FLAG; idx++;
+                    } else if (byte == (ESCAPE ^ 0x20)) {
+                        state_read = DATA;
+                        packet[idx] = ESCAPE; idx++;
+                    } else {
+                        state_read = START;
+                    }
+                    break;
+                case STOP_STATE:
+                    break;
+                default:
+                    break;
             }   
         }
     }
