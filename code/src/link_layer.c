@@ -2,7 +2,6 @@
 
 #include "link_layer.h"
 #include "serial_port.h"
-#include "projFlags.h"
 #include <stdio.h>
 #include <signal.h>
 #include <unistd.h>
@@ -11,14 +10,41 @@
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
+#define FLAG            0x7E
+#define A_TRANS         0x03
+#define A_RECEIV        0x01
+#define C_SET           0x03
+#define C_UA            0x07
+#define C_RR0           0xAA
+#define C_RR1           0xAB
+#define C_REJ0          0x54
+#define C_REJ1          0x55
+#define C_DISC          0x0B
+#define C_I0            0x00
+#define C_I1            0x80
+#define ESCAPE          0x7D
 
+typedef enum {
+    START,
+    FLAG_RCV,
+    A_RCV,
+    C_RCV,
+    BCC_OK,
+    STOP_STATE,
+    DATA,
+    ESCAPE_STATE
+} State;
+
+// Variables used in the process
 LinkLayer parameters;
 State state = START;
 extern int fd;
 volatile int waitAlarm = FALSE;
 unsigned char control_flag = 0;
 int currSeq = 0;
+int alarmCount = 0;
 
+// Statistics Variables
 unsigned int totalFramesSent = 0;
 unsigned int totalFramesReceived = 0;
 unsigned int retransmissions = 0;
@@ -29,6 +55,7 @@ void alarmHandler(int signal)
 {
     waitAlarm = FALSE;
     printf("Couldnt receive frame\n");
+    alarmCount++;
 }
 
 void alarmInit() {
@@ -36,6 +63,8 @@ void alarmInit() {
     alarm(parameters.timeout);
 }
 
+
+// State machine used in llopen and llwrite
 void handleState(unsigned char byte) {
     switch (state) {
         case START:
@@ -86,6 +115,7 @@ void handleState(unsigned char byte) {
     }
 }
 
+// Function of the TX to send the SET frame and receive the UA frame
 int transmitterSETframe() {
     (void)signal(SIGALRM, alarmHandler);
     int bytesSent = 0;
@@ -93,10 +123,9 @@ int transmitterSETframe() {
     unsigned char frame[5] = {FLAG, A_TRANS, C_SET, A_TRANS ^ C_SET, FLAG};
     printf("Sending SENT frame\n");
     
-    int alarmCount = 0;
-    while (alarmCount <= parameters.nRetransmissions) {
+    alarmCount = 0;
+    while (alarmCount < parameters.nRetransmissions) {
         if (!waitAlarm) {
-            alarmCount++;
             bytesSent = write(fd, frame, 5);
             printf("Written bytes on frame: %d\n", bytesSent);
             if (bytesSent != 5) {
@@ -122,6 +151,7 @@ int transmitterSETframe() {
     return -1;
 }
 
+// Function of the RX to receive the SET frame and send the UA frame
 int receiverSETframe() {
     while (TRUE) {
         unsigned char byteFrame = 0;
@@ -150,6 +180,7 @@ int receiverSETframe() {
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
+// Create connection between Tx and Rx
 int llopen(LinkLayer connectionParameters)
 {
     parameters = connectionParameters;
@@ -181,18 +212,23 @@ int llopen(LinkLayer connectionParameters)
 ////////////////////////////////////////////////
 // LLWRITE
 ////////////////////////////////////////////////
+// Creates the frame whose data is in the buf
+// Starts by adding the header of the frame and then adds the buf's data into the frame using byte stuffing;
+// After that, adds the BBC2 and FLAG to the final of the frame. Finally, sends the frame to the receiver and waits for the response
 int llwrite(const unsigned char *buf, int bufSize)
 {
     printf("Writting bytes...\n");
 
     unsigned char iframe[bufSize*2], bcc2 = 0;
     int idx = 0;
+
+    // Frame's header
     iframe[idx] = FLAG; idx++;
     iframe[idx] = A_TRANS; idx++;
     iframe[idx] = currSeq ? C_I1 : C_I0; idx++;
     iframe[idx] = A_TRANS ^ iframe[idx-1]; idx++;
 
-
+    // Adds buf's data into the frame
     for (int i = 0; i < bufSize; i++) {
         unsigned char currByte = buf[i];
 
@@ -226,21 +262,23 @@ int llwrite(const unsigned char *buf, int bufSize)
 
     iframe[idx] = FLAG;
 
-    int alarmCount = 0;
+    alarmCount = 0;
     int bytesSent = 0;
     waitAlarm = FALSE;
     state = START;
     unsigned char response = 0;
-    while (alarmCount <= parameters.nRetransmissions) {
+
+    // Sends frame and wait for answer. If response not received, resends the frame
+    while (alarmCount < parameters.nRetransmissions) {
 
         if (!waitAlarm) {
-            alarmCount++;
             retransmissions += alarmCount > 1 ? 1 : 0;
             totalFramesSent++;
             bytesSent = write(fd, iframe, idx+1);
             printf("Written bytes on frame: %d\n", bytesSent);
             
             alarmInit();
+            state = START;
         }
 
         int bytesResponse = read(fd, &response, 1);
@@ -263,12 +301,16 @@ int llwrite(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 // LLREAD
 ////////////////////////////////////////////////
+// Using a state machine fills the packet with the important data (using byte destuffing)
+// After that, checks if the frame's BBC2 matches with the calculation
+// If BBC2 correct, sends an answer to the Tx. If not, rejects the frame.
 int llread(unsigned char *packet)
 {
     State state_read = START;
     unsigned char control_byte = 0, byte = 0;
     int idx = 0; 
 
+    // Reads one byte at a time. Adds data to the packet
     while (state_read != STOP_STATE) {
         int byteRead = read(fd, &byte, 1);
 
@@ -345,6 +387,7 @@ int llread(unsigned char *packet)
         }
     }
 
+    // Calculate BBC2
     unsigned char bcc2 = 0;
     for (int i = 0; i < idx-1; i++) {
         bcc2 ^= packet[i];
@@ -352,16 +395,18 @@ int llread(unsigned char *packet)
 
     unsigned char control_response = 0;
 
+    // Reject frame
     if (bcc2 != packet[idx-1]) {
         printf("Wrong bcc2!\n");
 
-        control_response = currSeq ? C_REJ1 : C_REJ0;
+        control_response = currSeq ? C_REJ0 : C_REJ1;
 
         unsigned char response[5] = {FLAG, A_TRANS, control_response, A_TRANS ^ control_response, FLAG};
         write(fd, response, 5);
         return -1;
     }
 
+    // Send answer
     control_response = currSeq ? C_RR0 : C_RR1;
     unsigned char response[5] = {FLAG, A_TRANS, control_response, A_TRANS ^ control_response, FLAG};
     int writtenBytes = write(fd, response, 5);
@@ -375,6 +420,8 @@ int llread(unsigned char *packet)
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////
+// Tx tries to send the DISC frame and receive another DISC
+// If DISC was successful, Tx sends UA frame
 int llclose(int showStatistics) {
     state = START;
     unsigned char byte;
@@ -382,10 +429,10 @@ int llclose(int showStatistics) {
     unsigned char uaFrame[5] = {FLAG, A_RECEIV, C_UA, A_RECEIV ^ C_UA, FLAG};
 
     (void)signal(SIGALRM, alarmHandler);
-    int alarmCount = 0;
+    alarmCount = 0;
 
     if (parameters.role == LlTx) {
-        while (alarmCount <= parameters.nRetransmissions) {
+        while (alarmCount < parameters.nRetransmissions) {
             int bytesWritten = write(fd, discFrame, 5);
             printf("Transmitter sent DISC frame bytes: %d\n", bytesWritten);
 
@@ -460,8 +507,6 @@ int llclose(int showStatistics) {
             if (state == STOP_STATE) {
                 break;
             }
-
-            alarmCount++;
         }
 
         if (state != STOP_STATE) {
@@ -491,7 +536,7 @@ int llclose(int showStatistics) {
         }
 
     } else if (parameters.role == LlRx) {
-        while (alarmCount <= parameters.nRetransmissions) {
+        while (alarmCount < parameters.nRetransmissions) {
             int bytesRead = read(fd, &byte, 1);
             if (bytesRead > 0) {
                 printf("Receiver received byte: %02X, State: %d\n", byte, state);

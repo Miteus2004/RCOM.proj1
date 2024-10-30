@@ -2,10 +2,14 @@
 
 #include "application_layer.h"
 #include "link_layer.h"
-#include "projFlags.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+
+#define PACKET_START    0x01
+#define PACKET_DATA     0x02
+#define PACKET_END      0x03
+#define PACKET_FSIZE    0x00
 
 int sendControlPacket(unsigned char control, size_t size) {
     unsigned char packet[MAX_PAYLOAD_SIZE] = {0};
