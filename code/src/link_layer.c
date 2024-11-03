@@ -268,7 +268,9 @@ int llwrite(const unsigned char *buf, int bufSize)
     state = START;
     unsigned char response = 0;
 
-    // Sends frame and wait for answer. If response not received, resends the frame
+    // Sends frame and wait for answer
+    //If response not received, resends the frame
+    //If rejected, resend the frame without retransmission update
     while (alarmCount < parameters.nRetransmissions) {
 
         if (!waitAlarm) {
@@ -284,14 +286,26 @@ int llwrite(const unsigned char *buf, int bufSize)
         int bytesResponse = read(fd, &response, 1);
 
         if (bytesResponse > 0) {
+            printf("%02X ", response);
             handleState(response);
         }
 
-        if (state == STOP_STATE && control_flag == (currSeq? C_RR0 : C_RR1)) {
-            alarm(0);
-            printf("Info frame received\n");
-            currSeq = 1 - currSeq;
-            return idx;
+        if (state == STOP_STATE) {
+
+            // Info frame received
+            if (control_flag == (currSeq? C_RR0 : C_RR1)) {
+                alarm(0);
+                printf("Info frame received\n");
+                currSeq = 1 - currSeq;
+                return idx;
+            }
+
+            // Info frame rejected
+            if (control_flag == C_REJ0 || control_flag == C_REJ1) {
+                alarm(0);
+                waitAlarm = FALSE;
+                printf("Info frame rejected!\n");
+            }
         }
     }
 
@@ -447,7 +461,6 @@ int llclose(int showStatistics) {
             while (waitAlarm) {
                 int bytesRead = read(fd, &byte, 1);
                 if (bytesRead > 0) {
-                    printf("Transmitter received byte: %02X, State: %d\n", byte, state);
 
                     switch (state) {
                         case START:
@@ -539,7 +552,6 @@ int llclose(int showStatistics) {
         while (alarmCount < parameters.nRetransmissions) {
             int bytesRead = read(fd, &byte, 1);
             if (bytesRead > 0) {
-                printf("Receiver received byte: %02X, State: %d\n", byte, state);
 
                 switch (state) {
                     case START:
